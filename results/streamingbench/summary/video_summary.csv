@@ -1,0 +1,2 @@
+﻿video_name,video_duration,num_questions,num_correct,accuracy,total_wall_time,processing_speed_ratio,rtf,avg_end_to_end_latency,avg_generation_time,avg_queue_wait_time
+sample_55,637.0697666666666,5,3,0.6,105.09614299004897,6.061780656660136,0.16496802781890343,3.6051403999328615,3.553078556060791,0.052061843872070315

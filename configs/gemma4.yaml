@@ -1,0 +1,60 @@
+# OURS_Agent 配置（Gemma 4 多模态）。
+# 推理链：Agent -> GemmaBackend -> NativeMTMDBackend -> libmtmd/libllama -> Gemma 4。
+
+model:
+  path: "/home/wjl/OURS_Agent/models/gemma-4-E4B/gemma-4-E4B-it-Q8_0.gguf"
+  mmproj: "/home/wjl/OURS_Agent/models/gemma-4-E4B/mmproj-gemma-4-E4B-it-Q8_0.gguf"
+  n_ctx: 65536
+  n_batch: 2048
+  n_ubatch: 512
+  n_gpu_layers: -1
+  n_threads: null                 # null = 使用原生默认值（CPU 核数）
+  mmproj_use_gpu: true            # mmproj 视觉投影层是否卸载到 GPU
+  temperature: 1.0
+  top_p: 0.95
+  repeat_penalty: 1.1
+  max_tokens: 1024
+  seed: 1234
+
+runtime:
+  libllama_path: third_party/llama.cpp/build/bin/libllama.so
+  libmtmd_path: third_party/llama.cpp/build/bin/libmtmd.so
+  lib_dir: third_party/llama.cpp/build/bin
+
+video:
+  fps: 1.0
+  max_frames: 16
+  resize:
+    enabled: true
+    max_size: 336
+
+# 流式持久化 session：视频持续摄取 + 多个独立 query，KV 在整个 session 内持久化。
+streaming:
+  enabled: true
+  # 每个视觉处理单元累积的帧数：到达 num_frameproc 帧后做一次 AutoGaze/剪枝 + 一次
+  # 原生 tokenize/eval，再追加到持久化 KV。
+  num_frameproc: 4
+
+
+algorithms:
+  autogaze:
+    enabled: false
+    # AutoGaze 帧级输入过滤；仅在 enabled=true 时加载（需 PyTorch 与 autogaze 包）。
+    model_id: "nvidia/AutoGaze"      
+    gazing_ratio: 0.75               # 每帧最多凝视的 patch 比例
+    task_loss_requirement: 0.7       # 重建损失阈值，达到后停止凝视
+    device: null                     # 服务器 GPU 上设 "cuda"；null 表示默认(CPU)
+  semantic_pruning:
+    enabled: false
+    # 查询感知语义剪枝集成点。当前无具体打分器：enabled=true 会因未实现而清晰报错，
+    # 不会用恒等透传冒充真实语义剪枝（见 algorithms/semantic_pruning.py）。
+  region_selector:
+    enabled: false
+  token_selector:
+    enabled: false
+
+agent:
+  prompt_template: "What is happening in this video?"
+
+latency:
+  enabled: true

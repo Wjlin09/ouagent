@@ -1,0 +1,22 @@
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+.venv/
+venv/
+
+# Downloaded model files (GGUF)
+models/
+*.gguf
+
+# Ignore third-party dependencies
+third_party/
+
+# Ignore test files
+tests/
+
+# Ignore datasets and local data
+data/
+
+

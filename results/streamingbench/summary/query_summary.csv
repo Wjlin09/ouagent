@@ -1,0 +1,6 @@
+﻿video_name,question_id,scheduled_timestamp,actual_trigger_timestamp,queue_wait_time,generation_time,end_to_end_latency,correct,extracted_choice,reference_answer
+sample_55,Real-Time Visual Understanding_sample_55_1,15.0,15.015,0.01588273048400879,17.21111011505127,17.22699284553528,False,,A
+sample_55,Real-Time Visual Understanding_sample_55_2,139.0,139.139,0.008834600448608398,0.11758112907409668,0.12641572952270508,True,A,A
+sample_55,Real-Time Visual Understanding_sample_55_3,247.0,247.247,0.011242389678955078,0.163285493850708,0.17452788352966309,True,A,A
+sample_55,Real-Time Visual Understanding_sample_55_4,378.0,378.378,0.12627506256103516,0.15198373794555664,0.2782588005065918,False,C,A
+sample_55,Real-Time Visual Understanding_sample_55_5,496.0,496.496,0.09807443618774414,0.12143230438232422,0.21950674057006836,True,A,A
