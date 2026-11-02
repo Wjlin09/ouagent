@@ -1,22 +1,42 @@
+#__pycache__/
+#*.pyc
+#*.pyo
+#*.pyd
+#
+#.venv/
+#venv/
+#
+## Downloaded model files (GGUF)
+#models/
+#*.gguf
+#
+## Built llama.cpp artifacts
+#third_party/llama.cpp/build/
+#third_party/llama.cpp-master/build/
 __pycache__/
-*.pyc
-*.pyo
-*.pyd
-
+*.py[cod]
 .venv/
 venv/
 
-# Downloaded model files (GGUF)
 models/
 *.gguf
 
-# Ignore third-party dependencies
 third_party/
 
-# Ignore test files
-tests/
+*.so
+*.so.*
+*.dylib
+*.dll
+*.o
+*.a
+*.log
+.DS_Store
+.idea/
+.vscode/
 
 # Ignore datasets and local data
 data/
-
-
+# Ignore test files
+tests/
+# Ignore the build
+build/

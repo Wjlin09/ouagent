@@ -1,0 +1,6 @@
+﻿video_name,query_id,task_type,scheduled_timestamp,actual_trigger_timestamp,question,reference_answer,model_output,extracted_choice,correct,queue_wait_time,generation_time,end_to_end_latency
+sample_54,query-1,Action Perception,19.0,19.019,What are the hands doing right now?,D,B,B,False,0.11981010437011719,0.0829775333404541,0.2027876377105713
+sample_54,query-2,Action Perception,113.0,113.11299999999999,What is the gloved hand doing right now?,D,D,D,True,0.06755232810974121,0.09391975402832031,0.16147208213806152
+sample_54,query-3,Action Perception,209.0,209.20899999999997,What did the right hand do just now?,D,C,C,False,0.13208317756652832,0.10083389282226562,0.23291707038879395
+sample_54,query-4,Action Perception,3.1e+02,310.31,How is the glittery substance being applied to the circular object right now?,D,B,B,False,0.04718804359436035,0.07386660575866699,0.12105464935302734
+sample_54,query-5,Action Perception,407.0,407.407,What is the person doing right now?,D,A,A,False,0.05091738700866699,0.10419583320617676,0.15511322021484375

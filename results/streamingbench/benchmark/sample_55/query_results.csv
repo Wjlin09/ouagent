@@ -1,0 +1,6 @@
+﻿video_name,query_id,task_type,scheduled_timestamp,actual_trigger_timestamp,question,reference_answer,model_output,extracted_choice,correct,queue_wait_time,generation_time,end_to_end_latency
+sample_55,query-1,Action Perception,15.0,15.015,What did the hands do just now?,A,A,A,True,0.11979866027832031,0.1380620002746582,0.2578606605529785
+sample_55,query-2,Action Perception,139.0,139.139,What is the person doing right now?,A,A,A,True,0.12458467483520508,0.15833687782287598,0.28292155265808105
+sample_55,query-3,Action Perception,247.0,247.247,What is the person doing right now?,A,A,A,True,0.13736557960510254,0.15290188789367676,0.2902674674987793
+sample_55,query-4,Action Perception,378.0,378.378,What are the hands doing right now?,A,A,A,True,0.11715865135192871,0.18070697784423828,0.297865629196167
+sample_55,query-5,Action Perception,496.0,496.496,What is the person doing right now?,A,A,A,True,0.09126114845275879,0.19363784790039062,0.2848989963531494

@@ -1,107 +1,181 @@
-# OURS_Agent: Streaming Video VLM with Persistent KV Cache
+# OURS_Agent native (C++) — Full Agent Migration
+C++ 版本的 OURS_Agent 运行时。项目直接调用原生的 libmtmd + libllama C API。
+GPU: NVIDIA RTX 5090
+CUDA: 推荐 12.8 及以上
+C++ 编译器: gcc/g++ >= 11，CMake >= 3.20
 
-`OURS_Agent` 是一个基于 Gemma-4 (GGUF) 和 llama.cpp (libmtmd) 的**流式视频多模态推理框架**。
-本项目实现了持久化 Session 与增量 KV Cache 追加，支持多视频帧的统一编码、边看边答，以及在生成中途实时注入新帧。
-
----
-
-## 1. 环境要求与依赖准备
-
-### 1.1 基础硬件与软件
-- **GPU**: NVIDIA RTX  5090 
-- **CUDA**: 推荐 12.8 及以上
-- **Python**: 3.11（使用 Conda 环境）
-- **C++ 编译器**: `gcc/g++ >= 11`，`CMake >= 3.20`
-
-### 1.2 验证环境
-```bash
-nvcc --version
-python -c "import torch; print('PyTorch:', torch.__version__); print('PyTorch CUDA:', torch.version.cuda); print('CUDA available:', torch.cuda.is_available())"
+# 1. 目录结构 (Module Layout)
+```text
+OURS_Agent/
+├── CMakeLists.txt              # 构建脚本 (链接 libllama, libmtmd, ffmpeg)
+├── main.cpp                    # [入口 1] ours_agent：单视频、单 Query 的简单驱动
+├── ours_streamingbench.cpp     # [入口 2] ours_streamingbench：流式测试驱动（核心）
+├── ours_runtime_cli.cpp        # [入口 3] ours_runtime_cli：底层 Runtime 冒烟测试
+│
+├── agent/                      # 业务编排层
+│   ├── agent.h / .cpp          # Agent：封装原子操作 (Ingest, StartQuery, StepGen)
+│   ├── controller.h            # 策略决策：根据 State 决定下一步 Action
+│   └── state.h                 # 状态机：Session 生命周期与 Query 生命周期的独立管理
+│
+├── runtime/                    # 底层推理层
+│   ├── gemma_runtime.h / .cpp  # C++ 原生推理封装（驱动 llama.cpp）
+│   └── gemma_runtime_c_api.h/.cpp # C ABI 接口（为未来 Android/JNI/NPU 预留）
+│
+├── video/                      # 视频流处理层
+│   ├── reader.h / .cpp         # 视频解码 (基于 ffmpeg)，输出 RGB 帧与时间戳
+│   └── sampler.h               # 帧采样器 (控制 fps 与 max_frames 抽帧)
+│
+├── algorithms/                 # 算法扩展层 (预留)
+│   ├── frame_selector.h        # 视觉帧过滤（如 AutoGaze）
+│   ├── semantic_pruning.h      # 语义剪枝
+│   └── ...                     # 其它 Token/Region 选择器接口
+│
+└── evaluation/                 
+    └── latency.h               # 延迟统计
 ```
-> 确认输出中 CUDA 可用，且 PyTorch 的 CUDA 版本与系统一致（如 PyTorch 2.7.1+cu128）。
+本项目的核心原则是 Session 生命周期包含多个Query 生命周期，以 chunk 为单位进行处理，部分测试结果存储在results。
+Session：对应一整段视频，负责维护持久化的 KV Cache。
+Query：对应视频时间线上的单个问题，stop_query 或回答完毕不清空 Session 的 KV Cache。
 
-### 1.3 安装 Python 依赖
+# 2. 环境依赖与编译顺序 (Build Order)
+本项目依赖预先编译好的 libllama.so、libmtmd.so 以及 ffmpeg 开发库。
+
+## 第一步：准备并编译 llama.cpp
+首先，在 OURS_Agent 目录下拉取 llama.cpp 并编译它（生成动态链接库）：
+llama-cpp 部署 & 编译
+
 ```bash
-conda create -n ouagent python=3.10 -y
-conda activate ouagent
-pip install -r requirements.txt
-```
-## 2. 编译 llama.cpp
-```bash
-mkdir -p third_party && cd third_party
+mkdir -p third_party
+cd third_party
 git clone https://github.com/ggml-org/llama.cpp.git
+```
+
+```bash
 cd llama.cpp
-
-# 开启 CUDA 支持，生成构建脚本
-cmake -B build -DGGML_CUDA=ON
-
-# 编译 
-cmake --build build --config Release -j$(nproc)
-```
-> 验证编译是否成功
-```bash
-ls -lh build/bin/llama-mtmd-cli
+cmake -B build -DGGML_CUDA=ON #检查环境，生成构建脚本，假设已经配置好了 CUDA 环境
 ```
 
-## 3.下载模型文件
 ```bash
-#  本项目需要 Gemma-4 的文本主模型和视觉投影器（mmproj），建议放在 models/gemma-4-E4B 目录下。
+cmake --build build --config Release -j$(nproc) 
+# **编译阶段**，调用底层构建工具（make/ninja），实际调用编译器去翻译代码，最后生成 `llama-mtmd-cli`
+# cmake --build build --config Release -j4
+```
+> 检查结果
 
+```bash
+ls -lh build/bin/llama-mtmd-cli # 可以看到这个文件说明编译成功
+# ls -lh ~/OURS_Agent/third_party/llama.cpp/build/bin/llama-mtmd-cli
+```
+## 第二步：准备Gemma4 文件
+https://gemma.ai/get-started/
+>`mtmd` 的调用需要模型文件和 `mmproj`；
+>官方 `llama-mtmd-cli` 的接口就是通过 `-m/--model` 和 `--mmproj` 加载它们，再通过 `--image` 输入图片
+
+```bash
 mkdir -p models/gemma-4-E4B
 cd models/gemma-4-E4B
-
-# 确保安装了 huggingface_hub
-pip install -U huggingface_hub
-
-# 下载文本主模型 (Q8_0 格式)
-hf download ggml-org/gemma-4-E4B-GGUF gemma-4-E4B-Q8_0.gguf --local-dir .
-
-# 下载视觉投影器 (mmproj)
-curl -L -C - -o mmproj-F16.gguf "https://huggingface.co/unsloth/gemma-4-E4B-it-GGUF/resolve/main/mmproj-F16.gguf"
 ```
-> 下载后，请确认 configs/gemma4.yaml 中的 model.path 与 model.mmproj 字段指向上述两个真实文件。
 
-## 4. 快速测试与验证
-### 4.1 官方CLI 验证单图
 ```bash
-# 在 /path/to/OURS_Agent/third_party/llama.cpp 目录下运行：
-./build/bin/llama-mtmd-cli \
-  -m ~/OURS_Agent/models/gemma-4-E4B/gemma-4-E4B-Q8_0.gguf \
-  --mmproj ~/OURS_Agent/models/gemma-4-E4B/mmproj-F16.gguf \
-  --image ~/OURS_Agent/data/figure/COCO_val2014_000000210789.jpg \
-  --chat-template gemma \
-  -p "What color is the umbrella?" \
-  -n 20 -ngl 99 --flash-attn on
+# hf version 
+#有就行了，没有再执行以下命令
+pip install -U huggingface_hub # 安装 Hugging Face CLI
 ```
-### 4.2 运行本项目脚本
+
 ```bash
-# 单图推理
-python scripts/run_image.py \
-  --config configs/gemma4.yaml \
-  --image data/figure/COCO_val2014_000000210789.jpg \
-  --prompt "What is the color of the umbrella?"
+hf download ggml-org/gemma-4-E4B-GGUF \
+    gemma-4-E4B-Q8_0.gguf \
+    --local-dir .
+    
+cd ~/OURS_Agent/models/gemma-4-E4B
+
+curl -L -C - \
+  -o mmproj-F16.gguf \
+  "https://huggingface.co/unsloth/gemma-4-E4B-it-GGUF/resolve/main/mmproj-F16.gguf"
 ```
+
+# 3. 在 OURS_Agent 目录下编译项目
 ```bash
-# 长视频（不是流式）
-python scripts/run_video.py \
-  --config configs/gemma4.yaml \
-  --video /home/user/Dataset/video.mkv
+cmake -B build .
+cmake --build build -j8
+#(注：如果 llama.cpp 的编译产物不在默认的 third_party/llama.cpp/build 路径下，可以通过 -DLLAMA_CPP_DIR=... 和 -DLLAMA_BUILD_DIR=... 参数覆盖)
 ```
-### 4.3 streaming video inference
+
+# 4. 运行测试 (Usage)
+以下所有命令假设处于 OURS_Agent 目录。
+## 第一步：拉取 Streamingbench 数据集
 ```bash
-# 下载数据集
-# 下载视频文件 (解压到 data/StreamingBench/video/)
+cd data/StreamingBench/video/
 hf download "hf://datasets/mjuicem/StreamingBench/Real-Time Visual Understanding_51-100.zip"
 
-# 下载标注文件 (CSV)
+#下载标注文件 (CSV)
 hf download mjuicem/StreamingBench "Real-Time Visual Understanding.csv" \
   --repo-type dataset \
   --local-dir data/StreamingBench/annotations
-
-# 批量
-    python scripts/run_streamingbench_test.py --video-dir data/StreamingBench/video
-    # 单视频
-    python scripts/run_streamingbench_test.py --video data/StreamingBench/video/sample_55/video.mp4
 ```
-> 注意：测试结果将生成在 results/streamingbench/<video_stem>/ 目录下，包含每个视频的 query 延迟、视觉 token 统计、KV Cache 增长等图表源数据 (CSV/JSON)。
+## 第二步：单视频（非流式测试）
+
+```bash
+./build/ours_agent \
+  --video ./data/StreamingBench/video/sample_51/video.mp4 \
+  --model ./models/gemma-4-E4B/gemma-4-E4B-it-Q8_0.gguf \
+  --mmproj ./models/gemma-4-E4B/mmproj-gemma-4-E4B-it-Q8_0.gguf \
+  --prompt "What is happening in the video?" \
+  --max-frames 16 \
+  --fps 1.0 \
+  --resize 336 \
+  --verbose
+  ```
+## 第三步： StreamingBench 测试 (ours_streamingbench)
+针对StreamingBench 的连续视频流测试（持久化 Session，按视频时间戳触发 Query）。
+### 参数设置
+当前支持的参数包括：
+
+| 参数 | StreamingBench 默认值 |
+|---|---:|
+| `temperature` | `0.0` |
+| `top_p` | `0.95` |
+| `repeat_penalty` | `1.1` |
+| `seed` | `1234` |
+| `max_tokens` | `1024` |
+| `n_ctx` | `65536` |
+| `fps` | `1.0` |
+| `resize` | `336` |
+| `num_frameproc` | `4` |
+
+> num_frameproc: 每次批处理（Chunk）的帧数。决定 ingest_frame 攒够多少帧才一次性注入 KV Cache 中。影响处理效率和显存的瞬时峰值。
+
+### 单视频测试（限制 1 个问题排错）：
+```bash
+./build/ours_streamingbench \
+  --video ./data/StreamingBench/video/sample_52/video.mp4 \
+  --model ./models/gemma-4-E4B/gemma-4-E4B-it-Q8_0.gguf \
+  --mmproj ./models/gemma-4-E4B/mmproj-gemma-4-E4B-it-Q8_0.gguf \
+  --limit 1
+  ```
+### 单视频完整测试：
+```bash
+./build/ours_streamingbench \
+  --video ./data/StreamingBench/video/sample_52/video.mp4 \
+  --model ./models/gemma-4-E4B/gemma-4-E4B-it-Q8_0.gguf \
+  --mmproj ./models/gemma-4-E4B/mmproj-gemma-4-E4B-it-Q8_0.gguf 
+  ```
+> 测试结果会存在 results 里面
+
+### 多视频测试（空格分隔）：
+```bash
+./build/ours_streamingbench \
+  --video ./data/StreamingBench/video/sample_55/video.mp4 ./data/StreamingBench/video/sample_56/video.mp4 \
+  --model ./models/gemma-4-E4B/gemma-4-E4B-it-Q8_0.gguf \
+  --mmproj ./models/gemma-4-E4B/mmproj-gemma-4-E4B-it-Q8_0.gguf 
+  ```
+
+### 批量目录测试（自动遍历目录下的 sample_NN/video.mp4）：
+```bash
+./build/ours_streamingbench \
+  --video ./data/StreamingBench/video/ \
+  --model ./models/gemma-4-E4B/gemma-4-E4B-it-Q8_0.gguf \
+  --mmproj ./models/gemma-4-E4B/mmproj-gemma-4-E4B-it-Q8_0.gguf 
+  ```
+
 
