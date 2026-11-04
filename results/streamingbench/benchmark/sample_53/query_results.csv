@@ -1,6 +1,6 @@
 ﻿video_name,query_id,task_type,scheduled_timestamp,actual_trigger_timestamp,question,reference_answer,model_output,extracted_choice,correct,queue_wait_time,generation_time,end_to_end_latency
-sample_53,query-1,Action Perception,21.0,21.0,What is being done with the cutting mat right now?,D,D,D,True,0.07067322731018066,0.06386709213256836,0.13454031944274902
-sample_53,query-2,Action Perception,6e+01,6e+01,What action is being performed right now?,D,C,C,False,0.09038567543029785,0.08510971069335938,0.17549538612365723
-sample_53,query-3,Action Perception,86.0,86.0,What are the hands holding right now?,D,B,B,False,0.06529736518859863,0.08047771453857422,0.14577507972717285
-sample_53,query-4,Action Perception,143.0,143.0,What did the hands do just now?,D,D,D,True,0.04078078269958496,0.0780794620513916,0.11886024475097656
-sample_53,query-5,Action Perception,184.0,184.0,What did the hands do just now?,D,A,A,False,0.04264235496520996,0.08994936943054199,0.13259172439575195
+sample_53,query-1,Action Perception,21.0,21.0,What is being done with the cutting mat right now?,D,D,D,True,0.07001328468322754,0.06212759017944336,0.1321408748626709
+sample_53,query-2,Action Perception,6e+01,6e+01,What action is being performed right now?,D,C,C,False,0.09019756317138672,0.08306694030761719,0.1732645034790039
+sample_53,query-3,Action Perception,86.0,86.0,What are the hands holding right now?,D,A,A,False,0.06501889228820801,0.08072090148925781,0.14573979377746582
+sample_53,query-4,Action Perception,143.0,143.0,What did the hands do just now?,D,D,D,True,0.040564537048339844,0.07653522491455078,0.11709976196289062
+sample_53,query-5,Action Perception,184.0,184.0,What did the hands do just now?,D,B,B,False,0.04279208183288574,0.08845305442810059,0.13124513626098633

@@ -1,4 +1,4 @@
-// StreamingBench real-time test driver. 
+// StreamingBench real-time test driver. C++ port of
 //
 // Streams one video on its own timeline, triggering QA pairs at their CSV
 // ``time_stamp``. Generation and video ingestion are interleaved, so frames
@@ -862,7 +862,7 @@ struct Args {
     uint32_t n_batch = 2048;
     uint32_t n_ubatch = 512;
     int32_t n_gpu_layers = -1;
-    float temperature = 0.0f;
+    float temperature = 1.0f;
     float top_p = 0.95f;
     float repeat_penalty = 1.1f;
     uint32_t max_tokens = 1024;
@@ -1060,7 +1060,7 @@ int main(int argc, char ** argv) {
     }
     // Expand --video args: directories become their per-sample video.mp4 files.
     std::vector<std::string> videos = expand_video_paths(a.videos);
-    if (videos.empty() || a.model.empty() || a.mmproj.empty()) {
+    if (videos.empty()) {
         usage(argv[0]);
         return 2;
     }
@@ -1077,6 +1077,12 @@ int main(int argc, char ** argv) {
                 print_schedule(vp, video_key, schedule);
             }
             return 0;
+        }
+
+        // Normal inference additionally requires a model and mmproj.
+        if (a.model.empty() || a.mmproj.empty()) {
+            usage(argv[0]);
+            return 2;
         }
 
         ours::GemmaRuntimeConfig cfg;
