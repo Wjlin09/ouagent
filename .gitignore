@@ -40,3 +40,5 @@ data/
 tests/
 # Ignore the build
 build/
+build-android
+results/streamingbench/sample_51Debug.csv

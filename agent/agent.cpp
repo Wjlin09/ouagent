@@ -48,7 +48,6 @@ void Agent::ingest_frame(const Image & frame, double timestamp) {
     if (!processed.has_value()) {
         return;  // dropped by a selector/pruner
     }
-    state_.update_frame(*processed, timestamp);
     chunk_buffer_.push_back(std::move(*processed));
     if (static_cast<int>(chunk_buffer_.size()) >= num_frameproc_) {
         // A full chunk has formed: mark it ready so the Controller's next
@@ -113,9 +112,10 @@ void Agent::flush_chunk_impl() {
             }
             frames.push_back(Frame{img.rgb.data(), img.width, img.height});
         }
-        chunk_buffer_.clear();
+        
     }
     backend_->append_video_chunk(frames);
+    chunk_buffer_.clear();
 }
 
 // -- query lifecycle ---------------------------------------------------------

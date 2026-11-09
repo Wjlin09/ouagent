@@ -1,8 +1,7 @@
 // Mutable state shared across the streaming agent. 
-//
 // Split into two independent lifecycles so stop_query can never tear down a
 // session:
-//   * Session (frames, timestamps, history) -- cleared ONLY by end_session.
+//   * Session (history) -- cleared ONLY by end_session.
 //   * Query (question, output, stop flag) -- reset by start_query.
 //
 // STOP QUERY != RESET SESSION.
@@ -31,9 +30,6 @@ public:
     // -- SESSION-level ------------------------------------------------------
     SessionState session_state = SessionState::Inactive;
     double session_started_at = 0.0;
-    double current_timestamp = 0.0;
-    std::vector<Image> frame_buffer;
-    std::vector<double> frame_timestamps;
     std::vector<Message> conversation_history;
     std::string last_output;
 
@@ -51,9 +47,6 @@ public:
     void start_session() {
         session_state = SessionState::Active;
         session_started_at = now_seconds();
-        current_timestamp = session_started_at;
-        frame_buffer.clear();
-        frame_timestamps.clear();
         conversation_history.clear();
         last_output.clear();
         reset_query_fields();
@@ -63,8 +56,6 @@ public:
     void end_session() {
         session_state = SessionState::Ended;
         session_started_at = 0.0;
-        frame_buffer.clear();
-        frame_timestamps.clear();
         conversation_history.clear();
         last_output.clear();
         reset_query_fields();
@@ -97,27 +88,9 @@ public:
         stop_requested = false;
     }
 
-    // -- frames / history ---------------------------------------------------
-    void update_frame(const Image & frame, double timestamp) {
-        frame_buffer.push_back(frame);
-        frame_timestamps.push_back(timestamp);
-        current_timestamp = timestamp;
-    }
-
-    std::vector<Image> get_recent_frames(int n = -1) const {
-        if (n < 0 || frame_buffer.size() <= static_cast<size_t>(n)) {
-            return frame_buffer;
-        }
-        return std::vector<Image>(frame_buffer.end() - n, frame_buffer.end());
-    }
-
+    // -- history ------------------------------------------------------------
     void add_message(const std::string & role, const std::string & content) {
         conversation_history.push_back(Message{role, content});
-    }
-
-    void clear_frames() {
-        frame_buffer.clear();
-        frame_timestamps.clear();
     }
 
 private:
