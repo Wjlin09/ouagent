@@ -1,6 +1,5 @@
 // C++ implementation of the OURS_Agent native runtime.
 
-
 #include "gemma_runtime.h"
 #include "trace/trace_recorder.h"
 
@@ -41,9 +40,7 @@ constexpr size_t kEotTextMarkerCount = sizeof(kEotTextMarkers) / sizeof(kEotText
 
 // The leading <bos> is stripped by the common layer (add_bos=true) and re-added
 // by mtmd's add_special, so it is not part of these constants.
-//const char * const kGemma4UserOpen    = "<|turn>system\n<turn|>\n<|turn>user\n";
-//const char * const kGemma4UserOpen    = "<|turn>user\n";
-const char * const kGemma4UserOpen = "<|turn>system\nOutput only the option letter (A, B, C, or D).<turn|>\n<|turn>user\n";
+const char * const kGemma4UserOpen    = "<|turn>system\n<turn|>\n<|turn>user\n";
 const char * const kGemma4UserClose   = "<turn|>\n";
 const char * const kGemma4ModelOpen   = "<|turn>model\n";
 const char * const kGemma4ThinkSuffix = "";  // enable_thinking=true: thought channel left open
@@ -335,6 +332,9 @@ void GemmaRuntime::Impl::append_video_chunk(const std::vector<Frame> & frames) {
         log_info("[session] visual chunk appended: frames=%zu, n_past=%d",
                  frames.size(), n_past);
     }
+    if (trace_) {
+        span.end(static_cast<int64_t>(llama_state_seq_get_size(lctx, 0)));
+    }
 }
 
 // -- query lifecycle ---------------------------------------------------------
@@ -359,6 +359,9 @@ void GemmaRuntime::Impl::start_query(const std::string & question) {
             trace_ ? trace_->begin_operation("query_prefill") : TraceSpan{};
         append_to_context(text, /*frames=*/{}, /*add_special=*/n_past == 0,
                           /*logits_last=*/true);
+        if (trace_) {
+            span.end(static_cast<int64_t>(llama_state_seq_get_size(lctx, 0)));
+        }
     }
 
     turn_active = false;
@@ -775,6 +778,13 @@ std::string GemmaRuntime::infer_cli_equivalent(const Frame & frame,
 void GemmaRuntime::close() {
     impl_->teardown();
     loaded_ = false;
+}
+
+size_t GemmaRuntime::kv_used_bytes() const {
+    if (impl_->lctx == nullptr) {
+        return 0;
+    }
+    return llama_state_seq_get_size(impl_->lctx, /*seq_id=*/0);
 }
 
 } // namespace ours

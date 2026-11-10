@@ -35,6 +35,7 @@ struct TraceRecord {
     double start_epoch = 0.0;      // wall-clock seconds (system_clock)
     double end_epoch = 0.0;        // valid only for operations
     double video_timestamp = -1.0; // seconds on the video timeline; <0 => empty
+    int64_t kv_used_bytes = -1;    // KV-cache bytes in use (seq 0); <0 => not sampled
     std::string action;            // e.g. the Action name for action_selected
 };
 
@@ -102,7 +103,8 @@ public:
 
 private:
     friend class TraceSpan;
-    void finish_operation(const std::string & record_id, double end_epoch);
+    void finish_operation(const std::string & record_id, double end_epoch,
+                          int64_t kv_used_bytes = -1);
     std::string next_record_id() { return std::to_string(++record_counter_); }
     static double now_epoch() {
         return std::chrono::duration<double>(
@@ -145,7 +147,7 @@ public:
     TraceSpan & operator=(const TraceSpan &) = delete;
 
     bool is_active() const { return recorder_ != nullptr; }
-    void end();
+    void end(int64_t kv_used_bytes = -1);
     ~TraceSpan() { end(); }
 
 private:
@@ -172,18 +174,21 @@ inline TraceSpan TraceRecorder::begin_operation(const std::string & name,
     return TraceSpan(this, id);
 }
 
-inline void TraceSpan::end() {
+inline void TraceSpan::end(int64_t kv_used_bytes) {
     if (recorder_ != nullptr) {
-        recorder_->finish_operation(record_id_, TraceRecorder::now_epoch());
+        recorder_->finish_operation(record_id_, TraceRecorder::now_epoch(),
+                                    kv_used_bytes);
         recorder_ = nullptr;
     }
 }
 
 inline void TraceRecorder::finish_operation(const std::string & record_id,
-                                            double end_epoch) {
+                                            double end_epoch,
+                                            int64_t kv_used_bytes) {
     for (TraceRecord & r : records_) {
         if (r.record_id == record_id) {
             r.end_epoch = end_epoch;
+            r.kv_used_bytes = kv_used_bytes;
             return;
         }
     }
@@ -228,7 +233,8 @@ inline void TraceRecorder::write_csv(const std::string & path) const {
 
     emit_row({"record_id", "record_type", "run_id", "session_id", "query_id",
               "chunk_id", "parent_id", "name", "start_wall_time",
-              "end_wall_time", "duration_ms", "video_timestamp", "action"});
+              "end_wall_time", "duration_ms", "video_timestamp", "kv_used_bytes",
+              "action"});
 
     char buf[64];
     for (const TraceRecord & r : records_) {
@@ -253,6 +259,13 @@ inline void TraceRecorder::write_csv(const std::string & path) const {
         }
         if (r.video_timestamp >= 0.0) {
             std::snprintf(buf, sizeof(buf), "%.3f", r.video_timestamp);
+            cells.push_back(buf);
+        } else {
+            cells.push_back("");
+        }
+        if (r.kv_used_bytes >= 0) {
+            std::snprintf(buf, sizeof(buf), "%lld",
+                          static_cast<long long>(r.kv_used_bytes));
             cells.push_back(buf);
         } else {
             cells.push_back("");

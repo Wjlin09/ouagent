@@ -104,6 +104,10 @@ public:
 
     void close();
 
+    // KV-cache bytes currently in use for the single sequence (seq 0). Grows as
+    // chunks/queries/tokens are appended; resets to 0 on start_session().
+    size_t kv_used_bytes() const;
+
 private:
     struct Impl;
     std::unique_ptr<Impl> impl_;

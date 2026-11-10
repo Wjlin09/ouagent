@@ -141,7 +141,7 @@ std::pair<std::string, bool> Agent::step_generation() {
     if (r.done) {
         state_.end_query();
         if (trace_) {
-            decode_span_.end();
+            decode_span_.end(static_cast<int64_t>(backend_->kv_used_bytes()));
             trace_->event("query_end");
         }
     }
@@ -149,7 +149,12 @@ std::pair<std::string, bool> Agent::step_generation() {
 }
 
 void Agent::stop_query() {
-    decode_span_.end();  // close a decode span left open by a forced stop
+    // Close a decode span left open by a forced stop; sample KV usage first.
+    if (trace_) {
+        decode_span_.end(static_cast<int64_t>(backend_->kv_used_bytes()));
+    } else {
+        decode_span_.end();
+    }
     state_.stop_query();
     backend_->stop_query();
     state_.end_query();
