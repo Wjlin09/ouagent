@@ -115,6 +115,16 @@ struct GemmaRuntime::Impl {
 
     TraceRecorder * trace_ = nullptr;  // optional execution trace recorder
 
+    // Session-level chunk history (one entry per processed video chunk).
+    // Cleared by start_session()/end_session(), NOT by stop_query().
+    std::vector<ChunkHistoryEntry> chunk_history_;
+    int64_t chunk_counter_ = 0;
+
+    // Set when a prefill/decode failure may have left the KV cache inconsistent
+    // with n_past (llama.cpp does not reliably roll back aborted/fatal decodes).
+    // Blocks further inference until clear_session_state() resets it.
+    bool session_failed = false;
+
     explicit Impl(GemmaRuntimeConfig c, TraceRecorder * trace)
         : cfg(std::move(c)), trace_(trace) {}
 
@@ -137,8 +147,10 @@ struct GemmaRuntime::Impl {
 
     // internals
     int32_t append_to_context(const std::string & text, const std::vector<Frame> & frames,
-                              bool add_special, bool logits_last);
-    int32_t eval_chunks(const mtmd_input_chunks * chunks, bool logits_last);
+                              bool add_special, bool logits_last,
+                              ChunkHistoryEntry * chunk_entry = nullptr);
+    int32_t eval_chunks(const mtmd_input_chunks * chunks, bool logits_last,
+                        ChunkHistoryEntry * chunk_entry = nullptr);
     int32_t sample_one_token();
     void close_model_turn_if_open();
     std::string token_to_piece(llama_token token);
@@ -270,6 +282,9 @@ void GemmaRuntime::Impl::clear_session_state() {
     generation_count = 0;
     logits_logged = false;
     last_context_token_id = -1;
+    chunk_history_.clear();
+    chunk_counter_ = 0;
+    session_failed = false;
     if (lctx != nullptr) {
         llama_memory_clear(llama_get_memory(lctx), true);
         if (smpl != nullptr) {
@@ -294,6 +309,10 @@ void GemmaRuntime::Impl::end_session() {
 
 void GemmaRuntime::Impl::append_video_chunk(const std::vector<Frame> & frames) {
     ensure_loaded();
+    if (session_failed) {
+        throw GemmaRuntimeError("session failed: KV cache may be inconsistent; "
+                                "call start_session() to reinitialize");
+    }
     if (!session_active) {
         throw GemmaRuntimeError("append_video_chunk() requires an active session; "
                                 "call start_session() first");
@@ -301,6 +320,9 @@ void GemmaRuntime::Impl::append_video_chunk(const std::vector<Frame> & frames) {
     if (frames.empty()) {
         return;
     }
+
+    ChunkHistoryEntry entry;
+    entry.chunk_id = ++chunk_counter_;
 
     TraceSpan span = trace_ ? trace_->begin_operation("chunk_prefill") : TraceSpan{};
 
@@ -314,7 +336,7 @@ void GemmaRuntime::Impl::append_video_chunk(const std::vector<Frame> & frames) {
         for (size_t i = 1; i < frames.size(); ++i) {
             text += "\n" + marker;
         }
-        append_to_context(text, frames, /*add_special=*/false, /*logits_last=*/true);
+        append_to_context(text, frames, /*add_special=*/false, /*logits_last=*/true, &entry);
     } else {
         close_model_turn_if_open();
         const bool first = !turn_active;
@@ -323,9 +345,11 @@ void GemmaRuntime::Impl::append_video_chunk(const std::vector<Frame> & frames) {
         for (size_t i = 1; i < frames.size(); ++i) {
             text += "\n" + marker;
         }
-        append_to_context(text, frames, /*add_special=*/n_past == 0, /*logits_last=*/false);
+        append_to_context(text, frames, /*add_special=*/n_past == 0, /*logits_last=*/false, &entry);
         turn_active = true;
     }
+
+    chunk_history_.push_back(std::move(entry));
 
     n_frames_added += static_cast<uint32_t>(frames.size());
     if (cfg.verbose) {
@@ -344,6 +368,10 @@ void GemmaRuntime::Impl::start_query(const std::string & question) {
         throw GemmaRuntimeError("start_query() called while a query is already active");
     }
     ensure_loaded();
+    if (session_failed) {
+        throw GemmaRuntimeError("session failed: KV cache may be inconsistent; "
+                                "call start_session() to reinitialize");
+    }
     if (!session_active) {
         throw GemmaRuntimeError("start_query() requires an active session; "
                                 "call start_session() first");
@@ -386,6 +414,10 @@ void GemmaRuntime::Impl::stop_query() {
 }
 
 StepResult GemmaRuntime::Impl::step_generation() {
+    if (session_failed) {
+        throw GemmaRuntimeError("session failed: KV cache may be inconsistent; "
+                                "call start_session() to reinitialize");
+    }
     if (!query_active) {
         throw GemmaRuntimeError("step_generation() called with no active query");
     }
@@ -524,7 +556,8 @@ std::string GemmaRuntime::Impl::infer_cli_equivalent(const Frame & frame,
 
 int32_t GemmaRuntime::Impl::append_to_context(const std::string & text,
                                               const std::vector<Frame> & frames,
-                                              bool add_special, bool logits_last) {
+                                              bool add_special, bool logits_last,
+                                              ChunkHistoryEntry * chunk_entry) {
     const size_t n_frames = frames.size();
 
     std::vector<mtmd::bitmap_ptr> bitmaps;
@@ -574,19 +607,116 @@ int32_t GemmaRuntime::Impl::append_to_context(const std::string & text,
                                 ". Call reset() to start a new video.");
     }
 
-    n_past = eval_chunks(chunks.get(), logits_last);
+    n_past = eval_chunks(chunks.get(), logits_last, chunk_entry);
     return n_pos;
 }
 
-int32_t GemmaRuntime::Impl::eval_chunks(const mtmd_input_chunks * chunks, bool logits_last) {
-    llama_pos new_n_past = 0;
-    const int32_t res = mtmd_helper_eval_chunks(mtmd_ctx, lctx, chunks, n_past, /*seq_id=*/0,
-                                                static_cast<int32_t>(n_batch), logits_last,
-                                                &new_n_past);
-    if (res != 0) {
-        throw GemmaRuntimeError("mtmd_helper_eval_chunks failed: " + std::to_string(res));
+int32_t GemmaRuntime::Impl::eval_chunks(const mtmd_input_chunks * chunks, bool logits_last,
+                                        ChunkHistoryEntry * chunk_entry) {
+    const int n_embd_inp = llama_model_n_embd_inp(model);
+    const size_t n_chunks = mtmd_input_chunks_size(chunks);
+    const int32_t nb = static_cast<int32_t>(n_batch);
+
+    std::vector<float> embed_sum;      // n_embd_inp floats; running token sum
+    int64_t visual_tokens = 0;         // sum of per-chunk visual token counts
+    bool mapping_valid = true;         // false if any media chunk has n_pos != n_tokens
+    std::vector<VisualTokenRange> ranges;
+
+    llama_pos cur = n_past;
+    for (size_t i = 0; i < n_chunks; ++i) {
+        const bool chunk_logits_last = (i == n_chunks - 1) && logits_last;
+        const mtmd_input_chunk * chunk = mtmd_input_chunks_get(chunks, i);
+        const int ctype = static_cast<int>(mtmd_input_chunk_get_type(chunk));
+        int32_t res = 0;
+
+        if (ctype == MTMD_INPUT_CHUNK_TYPE_TEXT) {
+            res = mtmd_helper_eval_chunk_single(mtmd_ctx, lctx, chunk, cur, /*seq_id=*/0,
+                                                nb, chunk_logits_last, &cur);
+        } else if (ctype == MTMD_INPUT_CHUNK_TYPE_IMAGE ||
+                   ctype == MTMD_INPUT_CHUNK_TYPE_AUDIO) {
+            // Stage A: encode once (ViT + mmproj), then copy/pool the output
+            // before decoding -- never re-encode.
+            res = mtmd_encode_chunk(mtmd_ctx, chunk);
+            if (res != 0) {
+                session_failed = true;
+                throw GemmaRuntimeError("mtmd_encode_chunk failed: " + std::to_string(res));
+            }
+            float * embd = mtmd_get_output_embd(mtmd_ctx);
+            const int64_t n_tok =
+                static_cast<int64_t>(mtmd_input_chunk_get_n_tokens(chunk));
+            if (embed_sum.empty()) {
+                embed_sum.assign(static_cast<size_t>(n_embd_inp), 0.0f);
+            }
+            for (int64_t t = 0; t < n_tok; ++t) {
+                const float * row = embd + t * n_embd_inp;
+                for (int j = 0; j < n_embd_inp; ++j) {
+                    embed_sum[j] += row[j];
+                }
+            }
+            visual_tokens += n_tok;
+
+            // Stage A complete for this media chunk: its embeddings are extracted
+            // and pooled. (prefill_completed stays false until the whole loop
+            // finishes decoding every chunk.)
+            if (chunk_entry != nullptr) {
+                chunk_entry->encoded = true;
+            }
+
+            // Per-media 1:1 position check. n_pos == n_tokens only for non-M-RoPE;
+            // otherwise the Range cannot faithfully map token i -> start + i.
+            const int64_t n_pos = static_cast<int64_t>(mtmd_input_chunk_get_n_pos(chunk));
+            if (n_pos != n_tok) {
+                mapping_valid = false;
+            }
+
+            // Logical position range consumed by this media chunk.
+            VisualTokenRange r;
+            r.start = static_cast<int64_t>(cur);
+            r.count = n_pos;
+            ranges.push_back(r);
+
+            // Stage B: decode the already-encoded embeddings into the KV cache.
+            res = mtmd_helper_decode_image_chunk(mtmd_ctx, lctx, chunk, embd, cur,
+                                                 /*seq_id=*/0, nb, &cur, nullptr, nullptr);
+        } else {
+            session_failed = true;
+            throw GemmaRuntimeError("unsupported mtmd chunk type: " + std::to_string(ctype));
+        }
+
+        if (res != 0) {
+            // Decode (llama_process) may have written part of this chunk into the
+            // KV cache without updating n_past; llama.cpp does not reliably roll
+            // back aborted/fatal decodes, so mark the session failed.
+            session_failed = true;
+            throw GemmaRuntimeError("mtmd chunk eval failed (type=" + std::to_string(ctype) +
+                                    "): " + std::to_string(res));
+        }
     }
-    return new_n_past;
+
+    if (chunk_entry != nullptr) {
+        chunk_entry->embedding_dim = n_embd_inp;
+        chunk_entry->visual_token_count = visual_tokens;
+        chunk_entry->chunk_embedding.clear();
+        if (visual_tokens > 0) {
+            chunk_entry->chunk_embedding.reserve(static_cast<size_t>(n_embd_inp));
+            for (int j = 0; j < n_embd_inp; ++j) {
+                chunk_entry->chunk_embedding.push_back(
+                    embed_sum[j] / static_cast<float>(visual_tokens));
+            }
+        }
+        // prefill_completed is set only here, after every chunk (text and media)
+        // decoded without error. encoded was already set at embedding-extraction
+        // time inside the loop.
+        chunk_entry->prefill_completed = (visual_tokens > 0);
+        // The range mapping is a faithful 1:1 token->position map only when every
+        // media chunk has n_pos == n_tokens (non-M-RoPE). Otherwise it is
+        // unreliable and the entry must not be used for retrieval.
+        chunk_entry->position_mapping_valid = mapping_valid;
+        chunk_entry->visual_positions =
+            mapping_valid ? std::move(ranges) : std::vector<VisualTokenRange>{};
+    }
+
+    return cur;
 }
 
 int32_t GemmaRuntime::Impl::sample_one_token() {
@@ -785,6 +915,10 @@ size_t GemmaRuntime::kv_used_bytes() const {
         return 0;
     }
     return llama_state_seq_get_size(impl_->lctx, /*seq_id=*/0);
+}
+
+const std::vector<ChunkHistoryEntry> & GemmaRuntime::chunk_history() const {
+    return impl_->chunk_history_;
 }
 
 } // namespace ours

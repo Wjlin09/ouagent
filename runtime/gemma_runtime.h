@@ -21,6 +21,8 @@
 #include <string>
 #include <vector>
 
+#include "runtime/chunk_history.h"
+
 namespace ours {
 
 class TraceRecorder;
@@ -107,6 +109,10 @@ public:
     // KV-cache bytes currently in use for the single sequence (seq 0). Grows as
     // chunks/queries/tokens are appended; resets to 0 on start_session().
     size_t kv_used_bytes() const;
+
+    // Session-level chunk history (one entry per processed video chunk). Empty
+    // until a video chunk completes prefill; cleared by start/end_session().
+    const std::vector<ChunkHistoryEntry> & chunk_history() const;
 
 private:
     struct Impl;
